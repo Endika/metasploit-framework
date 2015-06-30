@@ -12,6 +12,16 @@ require 'time'
 
 CHECK_OLD_RUBIES = !!ENV['MSF_CHECK_OLD_RUBIES']
 SUPPRESS_INFO_MESSAGES = !!ENV['MSF_SUPPRESS_INFO_MESSAGES']
+TITLE_WHITELIST = %w{
+  a an and as at avserve callmenum configdir connect debug docbase dtspcd
+  execve file for from getinfo goaway gsad hetro historysearch htpasswd ibstat
+  id in inetd iseemedia jhot libxslt lmgrd lnk load main map migrate mimencode
+  multisort name net netcat nodeid ntpd nttrans of on onreadystatechange or
+  ovutil path pbot pfilez pgpass pingstr pls popsubfolders prescan readvar
+  relfile rev rexec rlogin rsh rsyslog sa sadmind say sblistpack spamd
+  sreplace tagprinter the tnftp to twikidraw udev uplay user username via
+  welcome with ypupdated zsudo
+}
 
 if CHECK_OLD_RUBIES
   require 'rvm'
@@ -166,7 +176,7 @@ class Msftidy
 
         case identifier
         when 'CVE'
-          warn("Invalid CVE format: '#{value}'") if value !~ /^\d{4}\-\d{4}$/
+          warn("Invalid CVE format: '#{value}'") if value !~ /^\d{4}\-\d{4,}$/
         when 'OSVDB'
           warn("Invalid OSVDB format: '#{value}'") if value !~ /^\d+$/
         when 'BID'
@@ -227,7 +237,7 @@ class Msftidy
 
   def check_comment_splat
     if @source =~ /^# This file is part of the Metasploit Framework and may be subject to/
-      warn("Module contains old license comment, use tools/dev/resplat.rb <filename>.")
+      warn("Module contains old license comment.")
     end
   end
 
@@ -419,21 +429,10 @@ class Msftidy
   end
 
   def check_title_casing
-    whitelist = %w{
-      a an and as at avserve callmenum configdir connect debug docbase dtspcd
-      execve file for from getinfo goaway gsad hetro historysearch htpasswd
-      ibstat id in inetd iseemedia jhot libxslt lmgrd lnk load main map
-      migrate mimencode multisort name net netcat nodeid ntpd nttrans of
-      on onreadystatechange or ovutil path pbot pfilez pgpass pingstr pls
-      popsubfolders prescan readvar relfile rev rexec rlogin rsh rsyslog sa
-      sadmind say sblistpack spamd sreplace tagprinter the to twikidraw udev
-      uplay user username via welcome with ypupdated zsudo
-    }
-
     if @source =~ /["']Name["'][[:space:]]*=>[[:space:]]*['"](.+)['"],*$/
       words = $1.split
       words.each do |word|
-        if whitelist.include?(word)
+        if TITLE_WHITELIST.include?(word)
           next
         elsif word =~ /^[a-z]+$/
           warn("Suspect capitalization in module title: '#{word}'")
@@ -524,7 +523,7 @@ class Msftidy
       end
 
       # The rest of these only count if it's not a comment line
-      next if ln =~ /[[:space:]]*#/
+      next if ln =~ /^[[:space:]]*#/
 
       if ln =~ /\$std(?:out|err)/i or ln =~ /[[:space:]]puts/
         next if ln =~ /^[\s]*["][^"]+\$std(?:out|err)/
@@ -532,14 +531,8 @@ class Msftidy
         error("Writes to stdout", idx)
       end
 
-      # You should not change datastore in code. See
-      # https://github.com/rapid7/metasploit-framework/issues/3853
-      if ln =~ /(?<!\.)datastore\[["'][^"']+["']\]\s*(=|<<)(?![=~>])/
-        info("datastore is modified in code with '#{Regexp.last_match(1)}': #{ln}", idx)
-      end
-
       # do not read Set-Cookie header (ignore commented lines)
-      if ln =~ /^(?!\s*#).+\[['"]Set-Cookie['"]\]/i
+      if ln =~ /^(?!\s*#).+\[['"]Set-Cookie['"]\](?!\s*=[^=~]+)/i
         warn("Do not read Set-Cookie header directly, use res.get_cookies instead: #{ln}", idx)
       end
 
@@ -548,9 +541,16 @@ class Msftidy
         warn("Auxiliary modules have no 'Rank': #{ln}", idx)
       end
 
-      if ln =~ /^\s*def\s+(?:[^\(\)]*[A-Z]+[^\(\)]*)(?:\(.*\))?$/
+      if ln =~ /^\s*def\s+(?:[^\(\)#]*[A-Z]+[^\(\)]*)(?:\(.*\))?$/
         warn("Please use snake case on method names: #{ln}", idx)
       end
+
+      if ln =~ /^\s*fail_with\(/
+        unless ln =~ /^\s*fail_with\(Failure\:\:(?:None|Unknown|Unreachable|BadConfig|Disconnected|NotFound|UnexpectedReply|TimeoutExpired|UserInterrupt|NoAccess|NoTarget|NotVulnerable|PayloadFailed),/
+          error("fail_with requires a valid Failure:: reason as first parameter: #{ln}", idx)
+        end
+      end
+
     end
   end
 
@@ -595,21 +595,36 @@ class Msftidy
   def check_invalid_url_scheme
     test = @source.scan(/^#.+http\/\/(?:www\.)?metasploit.com/)
     unless test.empty?
-      test.each do |item|
+      test.each { |item|
         info("Invalid URL: #{item}")
-      end
+      }
     end
   end
 
-  # This checks looks for extranous commas
-  # Stuff with comments should match too: , #metasploit module ]
-  # but it should not match interpolation #{
-  def check_comma
-    test = @source.scan(/[^\n]+,(?:\s*#[^{][^\n]+)?\s*[\]\}]/)
-    unless test.empty?
-      test.each do |item|
-        info("Extraneous comma: #{item}")
-      end
+  # Check for (v)print_debug usage, since it doesn't exist anymore
+  #
+  # @see https://github.com/rapid7/metasploit-framework/issues/3816
+  def check_print_debug
+    if @source =~ /print_debug/
+      error('Please don\'t use (v)print_debug, use vprint_(status|good|error|warning) instead')
+    end
+  end
+
+  # Check for modules registering the DEBUG datastore option
+  #
+  # @see https://github.com/rapid7/metasploit-framework/issues/3816
+  def check_register_datastore_debug
+    if @source =~ /Opt.*\.new\(["'](?i)DEBUG(?-i)["']/
+      error('Please don\'t register a DEBUG datastore option, it has an special meaning and is used for development')
+    end
+  end
+
+  # Check for modules using the DEBUG datastore option
+  #
+  # @see https://github.com/rapid7/metasploit-framework/issues/3816
+  def check_use_datastore_debug
+    if @source =~ /datastore\[["'](?i)DEBUG(?-i)["']\]/
+      error('Please don\'t use the DEBUG datastore option in production, it has an special meaning and is used for development')
     end
   end
 
@@ -662,7 +677,9 @@ def run_checks(full_filepath)
   tidy.check_sock_get
   tidy.check_udp_sock_get
   tidy.check_invalid_url_scheme
-  tidy.check_comma
+  tidy.check_print_debug
+  tidy.check_register_datastore_debug
+  tidy.check_use_datastore_debug
   return tidy
 end
 

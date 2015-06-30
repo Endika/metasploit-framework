@@ -11,11 +11,10 @@ matrix:
 before_install:
   - "echo 'gem: --no-ri --no-rdoc' > ~/.gemrc"
   - rake --version
-  # Uncomment when we have fewer shipping msftidy warnings.
-  # Merge committers will still be checking, just not autofailing.
-  # - ln -sf ../../tools/dev/pre-commit-hook.rb ./.git/hooks/post-merge
-  # - ls -la ./.git/hooks
-  # - ./.git/hooks/post-merge
+  # Fail build if msftidy is not successful
+  - ln -sf ../../tools/dev/pre-commit-hook.rb ./.git/hooks/post-merge
+  - ls -la ./.git/hooks
+  - ./.git/hooks/post-merge
 before_script:
   - cp config/database.yml.travis config/database.yml
   - bundle exec rake --version
@@ -23,11 +22,10 @@ before_script:
   - bundle exec rake db:migrate
 script:
   # fail build if db/schema.rb update is not committed
-  - git diff --exit-code && bundle exec rake $RAKE_TASKS
+  - git diff --exit-code db/schema.rb && bundle exec rake $RAKE_TASKS
 sudo: false
 rvm:
-  - '1.9.3'
-  - '2.1'
+  - '2.1.6'
 
 notifications:
   irc: "irc.freenode.org#msfnotify"
@@ -40,3 +38,6 @@ branches:
   except:
     - gh-pages
     - metakitty
+
+addons:
+  postgresql: '9.3'

@@ -12,6 +12,12 @@ module Metasploit
         include ActiveModel::Validations
 
         included do
+          # @!attribute framework
+          #   @return [Object] The framework instance object
+          attr_accessor :framework
+          # @!attribute framework_module
+          #   @return [Object] The framework module caller, if availale
+          attr_accessor :framework_module
           # @!attribute connection_timeout
           #   @return [Fixnum] The timeout in seconds for a single SSH connection
           attr_accessor :connection_timeout
@@ -214,8 +220,8 @@ module Metasploit
 
               if result.success?
                 consecutive_error_count = 0
-                break if stop_on_success
                 successful_users << credential.public
+                break if stop_on_success
               else
                 if result.status == Metasploit::Model::Login::Status::UNABLE_TO_CONNECT
                   consecutive_error_count += 1
